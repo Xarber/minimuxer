@@ -690,14 +690,12 @@ public final class LibimobiledeviceGateway: BaseDeviceGateway, DeviceGatewayAPI,
     func syncDumpProfiles(docsPath: String) throws -> String {
         let path = docsPath.hasPrefix("file://") ? String(docsPath.dropFirst(7)) : docsPath
         let dumpDir = path.hasSuffix("/Profiles") || path.hasSuffix("/Profiles/") ? path : "\(path)/Profiles"
-        try? FileManager.default.createDirectory(atPath: dumpDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: dumpDir, withIntermediateDirectories: true)
         if pairingFileType == .rppairing {
             return try withRSDService(.misagent) { stream in
                 try rsdSendPlist(stream, dict: ["MessageType": "CopyAll"])
                 let resp = try rsdRecvPlist(stream, timeoutMs: 10000)
-                guard let profiles = resp["ProfileArray"] as? [Data] else {
-                    return ""
-                }
+                let profiles = resp["ProfileArray"] as? [Data] ?? []
                 for (idx, pData) in profiles.enumerated() {
                     let filePath = (dumpDir as NSString).appendingPathComponent("Profile_\(idx).mobileprovision")
                     try? pData.write(to: URL(fileURLWithPath: filePath))
@@ -721,12 +719,21 @@ public final class LibimobiledeviceGateway: BaseDeviceGateway, DeviceGatewayAPI,
             var xmlPtr: UnsafeMutablePointer<CChar>? = nil
             var xmlLen: UInt32 = 0
             plist_to_xml(profilesPlist, &xmlPtr, &xmlLen)
-            if let xmlPtr = xmlPtr {
-                let xmlStr = String(cString: xmlPtr)
-                free(xmlPtr)
-                return xmlStr
+            guard let xmlPtr = xmlPtr else {
+                throw LibimobiledeviceGatewayError(.serviceError, reason: "misagent returned no profile data")
             }
-            return ""
+            defer { free(xmlPtr) }
+            let data = Data(bytes: xmlPtr, count: Int(xmlLen))
+            guard let response = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                  let profiles = response["ProfileArray"] as? [Data] else {
+                throw LibimobiledeviceGatewayError(.serviceError, reason: "misagent returned an invalid profile list")
+            }
+            for (index, profile) in profiles.enumerated() {
+                let destination = URL(fileURLWithPath: dumpDir)
+                    .appendingPathComponent("Profile_\(index).mobileprovision")
+                try profile.write(to: destination, options: .atomic)
+            }
+            return dumpDir
         }
     }
 
