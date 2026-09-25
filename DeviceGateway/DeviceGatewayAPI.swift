@@ -23,6 +23,20 @@ public struct PairedDeviceRecord: Sendable {
     }
 }
 
+public struct DeviceInstalledApp: Sendable {
+    public let bundleId: String
+    public let name: String
+    public let version: String
+    public let buildVersion: String
+
+    public init(bundleId: String, name: String, version: String, buildVersion: String) {
+        self.bundleId = bundleId
+        self.name = name
+        self.version = version
+        self.buildVersion = buildVersion
+    }
+}
+
 public protocol DeviceGatewayAPI: AnyObject, Sendable {
     var requiresUsbmuxd: Bool { get }
     var pairingFileType: PairingProtocol { get }
@@ -48,6 +62,7 @@ public protocol DeviceGatewayAPI: AnyObject, Sendable {
     func removeProvisioningProfile(id: String) async throws
     func dumpProfiles(docsPath: String) async throws -> String
     func removeApp(bundleId: String) async throws
+    func listInstalledApps() async throws -> [DeviceInstalledApp]
     func sendIpaAfc(bundleId: String, ipaBytes: Data) async throws
     func sendAppBundleAfc(bundleId: String, appURL: URL) async throws
     func installIpa(bundleId: String) async throws

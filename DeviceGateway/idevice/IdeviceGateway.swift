@@ -1045,6 +1045,43 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
             return (container, bundlePath, executableName)
         }
     }
+
+    private func syncListInstalledApps() throws -> [DeviceInstalledApp] {
+        try verifyInitialized()
+        return try performWithEitherService(
+            connectRP: installation_proxy_connect_rsd,
+            connectLockdown: installation_proxy_connect,
+            cleanup: installation_proxy_client_free,
+            serviceName: "instproxy"
+        ) { client in
+            var output: UnsafeMutableRawPointer? = nil
+            var count = 0
+            let options = plist_new_dict()
+            defer { plist_free(options) }
+            plist_dict_set_item(options, "ApplicationType", plist_new_string("User"))
+            let error = installation_proxy_get_apps(client, options, nil, 0, &output, &count)
+            if let error {
+                defer { idevice_error_free(error) }
+                throw IdeviceGatewayError(.serviceError, reason: "Failed to list installed apps: \(getErrorMessage(from: error))")
+            }
+            guard let output else { return [] }
+            defer { free(output) }
+            let records = output.assumingMemoryBound(to: plist_t?.self)
+            var apps: [DeviceInstalledApp] = []
+            for index in 0..<count {
+                guard let record = records[index],
+                      let idNode = plist_dict_get_item(record, "CFBundleIdentifier"),
+                      let bundleId = getRustPlistString(idNode), !bundleId.isEmpty else { continue }
+                let displayName = plist_dict_get_item(record, "CFBundleDisplayName").flatMap(getRustPlistString)
+                    ?? plist_dict_get_item(record, "CFBundleName").flatMap(getRustPlistString)
+                    ?? bundleId
+                let version = plist_dict_get_item(record, "CFBundleShortVersionString").flatMap(getRustPlistString) ?? ""
+                let build = plist_dict_get_item(record, "CFBundleVersion").flatMap(getRustPlistString) ?? ""
+                apps.append(DeviceInstalledApp(bundleId: bundleId, name: displayName, version: version, buildVersion: build))
+            }
+            return apps
+        }
+    }
     
     @discardableResult
     private func sendDebugProxyCommand(client: OpaquePointer, name: String, args: [String]) throws -> String? {
@@ -2327,6 +2364,10 @@ extension IdeviceGateway {
         try await withFFIDispatch {
             try self.syncRemoveApp(bundleId: bundleId)
         }
+    }
+
+    public func listInstalledApps() async throws -> [DeviceInstalledApp] {
+        try await withFFIDispatch { try self.syncListInstalledApps() }
     }
 
     public func sendIpaAfc(bundleId: String, ipaBytes: Data) async throws {

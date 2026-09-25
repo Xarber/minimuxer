@@ -754,6 +754,59 @@ public final class LibimobiledeviceGateway: BaseDeviceGateway, DeviceGatewayAPI,
         }
     }
 
+    func syncListInstalledApps() throws -> [DeviceInstalledApp] {
+        let entries: [[String: Any]]
+        if pairingFileType == .rppairing {
+            entries = try withRSDService(.installationProxy) { stream in
+                try rsdSendPlist(stream, dict: [
+                    "Command": "Browse",
+                    "ClientOptions": ["ApplicationType": "User"]
+                ])
+                var result: [[String: Any]] = []
+                while true {
+                    let response = try rsdRecvPlist(stream)
+                    result.append(contentsOf: response["CurrentList"] as? [[String: Any]] ?? [])
+                    if let error = response["Error"] as? String {
+                        throw LibimobiledeviceGatewayError(.serviceError, reason: "App listing failed: \(error)")
+                    }
+                    if response["Status"] as? String == "Complete" { break }
+                }
+                return result
+            }
+        } else {
+            entries = try withService(
+                service: .installationProxy,
+                create: instproxy_client_new,
+                cleanup: instproxy_client_free
+            ) { client in
+                let options = plist_new_dict()
+                defer { plist_free(options) }
+                plist_dict_set_item(options, "ApplicationType", plist_new_string("User"))
+                var records: plist_t? = nil
+                let error = instproxy_browse(client, options, &records)
+                guard error == INSTPROXY_E_SUCCESS, let records else {
+                    throw LibimobiledeviceGatewayError(.serviceError, reason: "App listing failed with code \(error.rawValue)")
+                }
+                defer { plist_free(records) }
+                var xml: UnsafeMutablePointer<CChar>? = nil
+                var length: UInt32 = 0
+                plist_to_xml(records, &xml, &length)
+                guard let xml else { return [] }
+                defer { free(xml) }
+                return (try PropertyListSerialization.propertyList(from: Data(bytes: xml, count: Int(length)), options: [], format: nil)) as? [[String: Any]] ?? []
+            }
+        }
+        return entries.compactMap { entry in
+            guard let id = entry["CFBundleIdentifier"] as? String, !id.isEmpty else { return nil }
+            return DeviceInstalledApp(
+                bundleId: id,
+                name: entry["CFBundleDisplayName"] as? String ?? entry["CFBundleName"] as? String ?? id,
+                version: entry["CFBundleShortVersionString"] as? String ?? "",
+                buildVersion: entry["CFBundleVersion"] as? String ?? ""
+            )
+        }
+    }
+
     private func rsdAfcSendPacket(
         _ stream: rppairing_service_stream_t,
         opcode: UInt64,
@@ -1432,6 +1485,10 @@ extension LibimobiledeviceGateway {
         try await withFFIDispatch {
             try self.syncRemoveApp(bundleId: bundleId)
         }
+    }
+
+    public func listInstalledApps() async throws -> [DeviceInstalledApp] {
+        try await withFFIDispatch { try self.syncListInstalledApps() }
     }
 
     public func sendIpaAfc(bundleId: String, ipaBytes: Data) async throws {
