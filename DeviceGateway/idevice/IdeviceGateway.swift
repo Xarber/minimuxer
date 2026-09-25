@@ -43,7 +43,7 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
         plist_get_string_val(node, &valPtr)
         if let ptr = valPtr {
             let val = String(cString: ptr)
-            free(ptr)
+            plist_mem_free(ptr)
             return val
         }
         return nil
@@ -996,12 +996,19 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
             }
             
             verboseLog("[IdeviceGateway] getAppPaths() installation_proxy_get_apps returned outLen: \(outLen)")
-            guard let resultPtr = outResult, outLen > 0 else {
+            guard let resultPtr = outResult else {
                 verboseLog("[IdeviceGateway] getAppPaths() app not found")
                 throw IdeviceGatewayError(.serviceError, reason: "App not found: \(appId)")
             }
             
             let plistArray = resultPtr.assumingMemoryBound(to: plist_t?.self)
+            defer {
+                for index in 0..<outLen { plist_free(plistArray[index]) }
+                idevice_data_free(resultPtr.assumingMemoryBound(to: UInt8.self), UInt(outLen * MemoryLayout<plist_t?>.stride))
+            }
+            guard outLen > 0 else {
+                throw IdeviceGatewayError(.serviceError, reason: "App not found: \(appId)")
+            }
             var container = ""
             var bundlePath = ""
             var executableName: String? = nil
@@ -1036,8 +1043,6 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
                     }
                 }
             }
-            free(outResult)
-            
             if container.isEmpty || bundlePath.isEmpty {
                 debugLog("[IdeviceGateway] getAppPaths() container or bundlePath is empty")
                 throw IdeviceGatewayError(.serviceError, reason: "Failed to resolve app paths")
@@ -1056,17 +1061,17 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
         ) { client in
             var output: UnsafeMutableRawPointer? = nil
             var count = 0
-            let options = plist_new_dict()
-            defer { plist_free(options) }
-            plist_dict_set_item(options, "ApplicationType", plist_new_string("User"))
-            let error = installation_proxy_get_apps(client, options, nil, 0, &output, &count)
+            let error = installation_proxy_get_apps(client, "User", nil, 0, &output, &count)
             if let error {
                 defer { idevice_error_free(error) }
                 throw IdeviceGatewayError(.serviceError, reason: "Failed to list installed apps: \(getErrorMessage(from: error))")
             }
             guard let output else { return [] }
-            defer { free(output) }
             let records = output.assumingMemoryBound(to: plist_t?.self)
+            defer {
+                for index in 0..<count { plist_free(records[index]) }
+                idevice_data_free(output.assumingMemoryBound(to: UInt8.self), UInt(count * MemoryLayout<plist_t?>.stride))
+            }
             var apps: [DeviceInstalledApp] = []
             for index in 0..<count {
                 guard let record = records[index],
