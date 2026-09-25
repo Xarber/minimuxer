@@ -1077,7 +1077,8 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
                     ?? bundleId
                 let version = plist_dict_get_item(record, "CFBundleShortVersionString").flatMap(getRustPlistString) ?? ""
                 let build = plist_dict_get_item(record, "CFBundleVersion").flatMap(getRustPlistString) ?? ""
-                apps.append(DeviceInstalledApp(bundleId: bundleId, name: displayName, version: version, buildVersion: build))
+                let signer = plist_dict_get_item(record, "SignerIdentity").flatMap(getRustPlistString)
+                apps.append(DeviceInstalledApp(bundleId: bundleId, name: displayName, version: version, buildVersion: build, signerIdentity: signer))
             }
             return apps
         }

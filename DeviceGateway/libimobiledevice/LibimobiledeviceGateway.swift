@@ -809,7 +809,8 @@ public final class LibimobiledeviceGateway: BaseDeviceGateway, DeviceGatewayAPI,
                 bundleId: id,
                 name: entry["CFBundleDisplayName"] as? String ?? entry["CFBundleName"] as? String ?? id,
                 version: entry["CFBundleShortVersionString"] as? String ?? "",
-                buildVersion: entry["CFBundleVersion"] as? String ?? ""
+                buildVersion: entry["CFBundleVersion"] as? String ?? "",
+                signerIdentity: entry["SignerIdentity"] as? String
             )
         }
     }

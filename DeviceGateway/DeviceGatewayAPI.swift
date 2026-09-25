@@ -28,12 +28,14 @@ public struct DeviceInstalledApp: Sendable {
     public let name: String
     public let version: String
     public let buildVersion: String
+    public let signerIdentity: String?
 
-    public init(bundleId: String, name: String, version: String, buildVersion: String) {
+    public init(bundleId: String, name: String, version: String, buildVersion: String, signerIdentity: String? = nil) {
         self.bundleId = bundleId
         self.name = name
         self.version = version
         self.buildVersion = buildVersion
+        self.signerIdentity = signerIdentity
     }
 }
 
