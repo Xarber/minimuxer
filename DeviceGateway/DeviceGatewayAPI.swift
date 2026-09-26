@@ -29,13 +29,15 @@ public struct DeviceInstalledApp: Sendable {
     public let version: String
     public let buildVersion: String
     public let signerIdentity: String?
+    public let isBetaApp: Bool
 
-    public init(bundleId: String, name: String, version: String, buildVersion: String, signerIdentity: String? = nil) {
+    public init(bundleId: String, name: String, version: String, buildVersion: String, signerIdentity: String? = nil, isBetaApp: Bool = false) {
         self.bundleId = bundleId
         self.name = name
         self.version = version
         self.buildVersion = buildVersion
         self.signerIdentity = signerIdentity
+        self.isBetaApp = isBetaApp
     }
 }
 
@@ -73,6 +75,7 @@ public protocol DeviceGatewayAPI: AnyObject, Sendable {
 
     func debugApp(appId: String) async throws
     func debugProcess(pid: UInt32) async throws
+    func backupExchange(bundleId: String, action: String, file: String, offset: Int64, data: Data) async throws -> Data
 
     func performHeartbeat(interval: UInt64) async throws -> UInt64
 

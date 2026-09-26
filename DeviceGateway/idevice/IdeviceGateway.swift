@@ -1083,7 +1083,9 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
                 let version = plist_dict_get_item(record, "CFBundleShortVersionString").flatMap(getRustPlistString) ?? ""
                 let build = plist_dict_get_item(record, "CFBundleVersion").flatMap(getRustPlistString) ?? ""
                 let signer = plist_dict_get_item(record, "SignerIdentity").flatMap(getRustPlistString)
-                apps.append(DeviceInstalledApp(bundleId: bundleId, name: displayName, version: version, buildVersion: build, signerIdentity: signer))
+                var beta: UInt8 = 0
+                if let node = plist_dict_get_item(record, "BetaApp") { plist_get_bool_val(node, &beta) }
+                apps.append(DeviceInstalledApp(bundleId: bundleId, name: displayName, version: version, buildVersion: build, signerIdentity: signer, isBetaApp: beta != 0))
             }
             return apps
         }
@@ -1279,12 +1281,28 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
             try launchAppPre17(appId: appId)
         } else {
             let (_, bundlePath, executableName) = try getAppPaths(appId: appId)
+            let launchedPID: UInt32 = try performWithService(
+                connect: app_service_connect_rsd,
+                cleanup: app_service_free,
+                serviceName: "app service"
+            ) { client in
+                var response: UnsafeMutablePointer<LaunchResponseC>?
+                if let error = app_service_launch_app(client, appId, nil, 0, 0, 0, nil, &response) {
+                    defer { idevice_error_free(error) }
+                    throw IdeviceGatewayError(.serviceError, reason: "Could not launch app on selected device: \(getErrorMessage(from: error))")
+                }
+                guard let response else {
+                    throw IdeviceGatewayError(.serviceError, reason: "App service returned no process")
+                }
+                defer { app_service_free_launch_response(response) }
+                return response.pointee.pid
+            }
             try performWithService(
                 connect: debug_proxy_connect_rsd,
                 cleanup: debug_proxy_free,
                 serviceName: "debug proxy"
             ) { client in
-                guard let pid = try self.findProcessPID(
+                guard let pid = launchedPID > 0 ? launchedPID : try self.findProcessPID(
                     appId: appId,
                     bundlePath: bundlePath.isEmpty ? nil : bundlePath,
                     executableName: executableName,
@@ -2501,6 +2519,56 @@ extension IdeviceGateway {
     public func afcGetFileInfo(bundleId: String, path: String) async throws -> (isDirectory: Bool, fileSize: Int64) {
         try await withFFIDispatch {
             try self.syncAfcGetFileInfo(bundleId: bundleId, path: path)
+        }
+    }
+
+    public func backupExchange(bundleId: String, action: String, file: String, offset: Int64, data: Data) async throws -> Data {
+        try await withFFIDispatch {
+            func check(_ error: UnsafeMutablePointer<IdeviceFfiError>?) throws {
+                if let error {
+                    defer { idevice_error_free(error) }
+                    throw IdeviceGatewayError(.serviceError, reason: self.getErrorMessage(from: error))
+                }
+            }
+            if action == "launch" {
+                if self.pairingFileType == .lockdown { try self.launchAppPre17(appId: bundleId) }
+                else {
+                    try self.performWithService(connect: app_service_connect_rsd, cleanup: app_service_free, serviceName: "app service") { client in
+                        var response: UnsafeMutablePointer<LaunchResponseC>?
+                        try check(app_service_launch_app(client, bundleId, nil, 0, 1, 0, nil, &response))
+                        if let response { app_service_free_launch_response(response) }
+                    }
+                }
+                return Data()
+            }
+            guard ["request.json", "status.json", "backup.bin"].contains(file), offset >= 0,
+                  data.count <= 262144, ["read", "write", "reset"].contains(action) else {
+                throw IdeviceGatewayError(.serviceError, reason: "Invalid backup transfer request")
+            }
+            let client = try self.startHouseArrestAfc(bundleId: bundleId)
+            defer { self.afcClientFree(client: client) }
+            let directory = "/Documents/.sidestore-remote"
+            if let error = afc_make_directory(client, directory) { idevice_error_free(error) }
+            let path = directory + "/" + file
+            var handle: OpaquePointer?
+            // WrOnly truncates; Rw preserves the previous chunks.
+            let mode: UInt32 = action == "read" ? 1 : (action == "reset" ? 3 : 2)
+            try check(afc_file_open(client, path, AfcFopenMode(rawValue: mode), &handle))
+            defer { if let error = afc_file_close(handle) { idevice_error_free(error) } }
+            var position: Int64 = 0
+            try check(afc_file_seek(handle, offset, 0, &position))
+            if action == "read" {
+                var bytes: UnsafeMutablePointer<UInt8>?
+                var count = 0
+                try check(afc_file_read(handle, &bytes, 262144, &count))
+                guard let bytes else { return Data() }
+                defer { afc_file_read_data_free(bytes, count) }
+                return Data(bytes: bytes, count: count)
+            }
+            try data.withUnsafeBytes { buffer in
+                if !data.isEmpty { try check(afc_file_write(handle, buffer.baseAddress?.assumingMemoryBound(to: UInt8.self), data.count)) }
+            }
+            return Data()
         }
     }
 

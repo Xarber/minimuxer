@@ -115,15 +115,9 @@ final internal class MinimuxerImpl: MinimuxerAPI {
         }
 
         // check connection status first
-        if withNetworkCheck && !(
-            self.network.isWifiSatisfied   /* ||
-            self.network.isWiredSatisfied     ||
-            self.network.isUsbSatisfied       ||
-            self.network.isBridgeSatisfied */
-        ){
-            debugLog("[minimuxer] minimuxer not ready: no network connection")
-            return .failure(.noConnection("No wifi interface satisfied"))
-        }
+        // Wi-Fi satisfaction is not a reachability test: hotspot hosts and
+        // airplane-mode loopback tunnels can reach devices without it. Keep
+        // the transport checks below and let the actual connection verify reachability.
 
         // check connection mode
         let connectionMode = await getConnectionMode()

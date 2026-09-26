@@ -91,6 +91,7 @@ let package = Package(
         .target(
             name: "LibimobiledeviceGateway",
             dependencies: [
+                "IdeviceGateway",
                 "DeviceGatewayAPI",
                 .product(name: "MinimuxerCommon", package: "Common"),
                 "libimobiledevice",

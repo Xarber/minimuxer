@@ -12,6 +12,7 @@ import OpenSSL
 import RPPairing
 import DeviceGatewayAPI
 import MinimuxerCommon
+import IdeviceGateway
 
 internal final class LibimobiledeviceGatewayError: DeviceGatewayError, @unchecked Sendable {
     override var errorDescription: String? {
@@ -810,7 +811,8 @@ public final class LibimobiledeviceGateway: BaseDeviceGateway, DeviceGatewayAPI,
                 name: entry["CFBundleDisplayName"] as? String ?? entry["CFBundleName"] as? String ?? id,
                 version: entry["CFBundleShortVersionString"] as? String ?? "",
                 buildVersion: entry["CFBundleVersion"] as? String ?? "",
-                signerIdentity: entry["SignerIdentity"] as? String
+                signerIdentity: entry["SignerIdentity"] as? String,
+                isBetaApp: entry["BetaApp"] as? Bool ?? false
             )
         }
     }
@@ -1524,8 +1526,19 @@ extension LibimobiledeviceGateway {
     }
 
     public func debugApp(appId: String) async throws {
-        try await withFFIDispatch {
-            try self.syncDebugApp(appId: appId)
+        guard let pairingFileData else { throw LibimobiledeviceGatewayError(.connectionFailed, reason: "Pairing record unavailable") }
+        let bridge = IdeviceGateway()
+        bridge.setDeviceEndpointIp(deviceEndpointIp)
+        bridge.setPort(getPort(for: pairingFileType), for: pairingFileType)
+        let plist = try PropertyListSerialization.propertyList(from: pairingFileData, format: nil)
+        let xml = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try await bridge.start(pairingFileContent: String(decoding: xml, as: UTF8.self), preferred: pairingFileType)
+        do {
+            try await bridge.debugApp(appId: appId)
+            try await bridge.stop()
+        } catch {
+            try? await bridge.stop()
+            throw error
         }
     }
 
@@ -1588,6 +1601,25 @@ extension LibimobiledeviceGateway {
         onRequestPin: @escaping @Sendable (@escaping @Sendable (String) -> Void) -> Void
     ) async throws -> PairedDeviceRecord {
         throw LibimobiledeviceGatewayError(.unsupportedOperation, reason: "triggerWirelessPair (RemotePairing is not supported on pure Lockdown gateway)")
+    }
+
+    public func backupExchange(bundleId: String, action: String, file: String, offset: Int64, data: Data) async throws -> Data {
+        // Reuse the same bounded House Arrest implementation for both backends.
+        guard let pairingFileData else { throw LibimobiledeviceGatewayError(.connectionFailed, reason: "Pairing record unavailable") }
+        let bridge = IdeviceGateway()
+        bridge.setDeviceEndpointIp(deviceEndpointIp)
+        bridge.setPort(getPort(for: pairingFileType), for: pairingFileType)
+        let plist = try PropertyListSerialization.propertyList(from: pairingFileData, format: nil)
+        let xml = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try await bridge.start(pairingFileContent: String(decoding: xml, as: UTF8.self), preferred: pairingFileType)
+        do {
+            let result = try await bridge.backupExchange(bundleId: bundleId, action: action, file: file, offset: offset, data: data)
+            try await bridge.stop()
+            return result
+        } catch {
+            try? await bridge.stop()
+            throw error
+        }
     }
 
     public func afcListDirectory(bundleId: String, path: String) async throws -> [String] {
